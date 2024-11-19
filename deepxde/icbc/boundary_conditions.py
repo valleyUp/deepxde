@@ -55,7 +55,10 @@ class BC(ABC):
     def normal_derivative(self, X, inputs, outputs, beg, end):
         dydx = grad.jacobian(outputs, inputs, i=self.component, j=None)[beg:end]
         n = self.boundary_normal(X, beg, end, None)
-        return bkd.sum(dydx * n, 1, keepdims=True)
+        print(f"dydx: {dydx.shape}, n: {n.shape}")
+        n_select = n[:dydx.shape[0]]
+        print(f"dydx: {dydx.shape}, n_select: {n_select.shape}")
+        return bkd.sum(dydx * n_select, 1, keepdims=True)
 
     @abstractmethod
     def error(self, X, inputs, outputs, beg, end, aux_var=None):
@@ -90,7 +93,8 @@ class NeumannBC(BC):
 
     def error(self, X, inputs, outputs, beg, end, aux_var=None):
         values = self.func(X, beg, end, aux_var)
-        return self.normal_derivative(X, inputs, outputs, beg, end) - values
+        out = self.normal_derivative(X, inputs, outputs, beg, end)
+        return out - values[:out.shape[0]]
 
 
 class RobinBC(BC):
