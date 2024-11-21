@@ -356,31 +356,12 @@ class Model:
                 )
 
         def train_step(inputs, targets, auxiliary_vars):
-            batch_size = 32
-            dataset_size = len(inputs)
-            num_batches = (dataset_size + batch_size - 1) // batch_size  # 计算需要的batch数量
-
-            for batch_idx in range(num_batches):
-                start_idx = batch_idx * batch_size
-                end_idx = min(start_idx + batch_size, dataset_size)
-                
-                batch_inputs = inputs[start_idx:end_idx]
-                batch_targets = targets[start_idx:end_idx]
-                if auxiliary_vars is not None:
-                    batch_auxiliary_vars = auxiliary_vars[start_idx:end_idx]
-                else:
-                    batch_auxiliary_vars = None
-                print(f"batch: {batch_idx}")
-                def closure():
-                    losses = outputs_losses_train(batch_inputs, batch_targets, batch_auxiliary_vars)[1]
-                    total_loss = torch.sum(losses)
-                    self.opt.zero_grad()
-                    total_loss.backward()
-                    return total_loss
-
-                self.opt.step(closure)
-                if self.lr_scheduler is not None:
-                    self.lr_scheduler.step()
+            def closure():
+                losses = outputs_losses_train(inputs, targets, auxiliary_vars)[1]
+                total_loss = torch.sum(losses)
+                self.opt.zero_grad()
+                total_loss.backward()
+                return total_loss
 
             self.opt.step(closure)
             if self.lr_scheduler is not None:
