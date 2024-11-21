@@ -79,6 +79,7 @@ class PDE(Data):
         num_domain=0,
         num_boundary=0,
         train_distribution="Hammersley",
+        batch_size=None,
         anchors=None,
         exclusions=None,
         solution=None,
@@ -126,6 +127,10 @@ class PDE(Data):
         self.train_x, self.train_y = None, None
         self.test_x, self.test_y = None, None
         self.train_aux_vars, self.test_aux_vars = None, None
+
+        # set for mini-batch training
+        self.batch_size = batch_size
+        self.current_index = 0
 
         self.train_next_batch()
         self.test()
@@ -182,29 +187,50 @@ class PDE(Data):
 
     @run_if_all_none("train_x", "train_y", "train_aux_vars")
     def train_next_batch(self, batch_size=None):
-        self.train_x_all = self.train_points()
-        self.bc_points()  # Generate self.num_bcs and self.train_x_bc
-        if self.bcs and config.hvd is not None:
-            num_bcs = np.array(self.num_bcs)
-            config.comm.Bcast(num_bcs, root=0)
-            self.num_bcs = list(num_bcs)
+        if batch_size is None:
+            batch_size = 64
 
-            x_bc_shape = np.array(self.train_x_bc.shape)
-            config.comm.Bcast(x_bc_shape, root=0)
-            if len(self.train_x_bc) != x_bc_shape[0]:
-                self.train_x_bc = np.empty(x_bc_shape, dtype=self.train_x_bc.dtype)
-            config.comm.Bcast(self.train_x_bc, root=0)
-        self.train_x = self.train_x_bc
-        if config.parallel_scaling == "strong":
-            self.train_x_all = mpi_scatter_from_rank0(self.train_x_all)
-        if self.pde is not None:
-            self.train_x = np.vstack((self.train_x, self.train_x_all))
-        self.train_y = self.soln(self.train_x) if self.soln else None
-        if self.auxiliary_var_fn is not None:
-            self.train_aux_vars = self.auxiliary_var_fn(self.train_x).astype(
-                config.real(np)
-            )
-        return self.train_x, self.train_y, self.train_aux_vars
+        if self.current_index == 0:
+            self.train_x_all = self.train_points()
+            self.bc_points()  # Generate self.num_bcs and self.train_x_bc
+            if self.bcs and config.hvd is not None:
+                num_bcs = np.array(self.num_bcs)
+                config.comm.Bcast(num_bcs, root=0)
+                self.num_bcs = list(num_bcs)
+
+                x_bc_shape = np.array(self.train_x_bc.shape)
+                config.comm.Bcast(x_bc_shape, root=0)
+                if len(self.train_x_bc) != x_bc_shape[0]:
+                    self.train_x_bc = np.empty(x_bc_shape, dtype=self.train_x_bc.dtype)
+                config.comm.Bcast(self.train_x_bc, root=0)
+            self.train_x = self.train_x_bc
+            if config.parallel_scaling == "strong":
+                self.train_x_all = mpi_scatter_from_rank0(self.train_x_all)
+            if self.pde is not None:
+                self.train_x = np.vstack((self.train_x, self.train_x_all))
+            self.train_y = self.soln(self.train_x) if self.soln else None
+            if self.auxiliary_var_fn is not None:
+                self.train_aux_vars = self.auxiliary_var_fn(self.train_x).astype(
+                    config.real(np)
+                )
+
+        # 计算当前 mini-batch 的起始和结束索引
+        start_index = self.current_index
+        end_index = min(start_index + batch_size, len(self.train_x))
+
+        # 获取 mini-batch 数据
+        X_train_batch = self.train_x[start_index:end_index]
+        y_train_batch = self.train_y[start_index:end_index] if self.train_y is not None else None
+        train_aux_vars_batch = self.train_aux_vars[start_index:end_index] if self.train_aux_vars is not None else None
+
+        # 更新当前索引
+        self.current_index = end_index
+
+        # 如果当前索引已经超过数据长度，重置索引
+        if self.current_index >= len(self.train_x):
+            self.current_index = 0
+
+        return X_train_batch, y_train_batch, train_aux_vars_batch
 
     @run_if_all_none("test_x", "test_y", "test_aux_vars")
     def test(self):

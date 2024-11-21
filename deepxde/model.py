@@ -770,28 +770,49 @@ class Model:
         prev_n_iter = 0
         while prev_n_iter < optimizers.LBFGS_options["maxiter"]:
             self.callbacks.on_epoch_begin()
-            self.callbacks.on_batch_begin()
+            self.train_state.epoch += 1  # 记录epoch
+            epoch_steps = 0
 
-            self.train_state.set_data_train(
-                *self.data.train_next_batch(self.batch_size)
-            )
-            self._train_step(
-                self.train_state.X_train,
-                self.train_state.y_train,
-                self.train_state.train_aux_vars,
-            )
+            # 遍历整个训练集，每次获取一个mini-batch
+            while True:
+                self.callbacks.on_batch_begin()
 
-            n_iter = self.opt.state_dict()["state"][0]["n_iter"]
-            if prev_n_iter == n_iter - 1:
-                # Converged
-                break
+                # 获取mini-batch数据
+                X_train_batch, y_train_batch, train_aux_vars_batch = self.data.train_next_batch(self.batch_size)
 
-            self.train_state.epoch += n_iter - prev_n_iter
-            self.train_state.step += n_iter - prev_n_iter
-            prev_n_iter = n_iter
-            self._test(verbose=verbose)
+                # 如果返回的数据为空，说明一个epoch已经结束
+                #TODO still wrong, need to figure out a right way to handle the end of epoch
+                if len(X_train_batch) == 0:
+                    print("end batch")
+                    break
 
-            self.callbacks.on_batch_end()
+                # 设置当前mini-batch数据
+                self.train_state.set_data_train(X_train_batch, y_train_batch, train_aux_vars_batch)
+
+                # 执行训练步骤
+                self._train_step(
+                    self.train_state.X_train,
+                    self.train_state.y_train,
+                    self.train_state.train_aux_vars,
+                )
+
+                # 更新训练步数
+                self.train_state.step += 1
+                epoch_steps += 1
+
+                n_iter = self.opt.state_dict()["state"][0]["n_iter"]
+                if prev_n_iter == n_iter - 1:
+                    # Converged
+                    break
+
+                self._test(verbose=verbose)
+
+                self.callbacks.on_batch_end()
+
+                if self.stop_training:
+                    break
+
+            self.train_state.epoch_steps = epoch_steps  # 记录当前epoch的步数
             self.callbacks.on_epoch_end()
 
             if self.stop_training:
