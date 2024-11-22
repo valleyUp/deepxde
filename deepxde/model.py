@@ -671,23 +671,52 @@ class Model:
     def _train_sgd(self, iterations, display_every, verbose=1):
         for i in range(iterations):
             self.callbacks.on_epoch_begin()
-            self.callbacks.on_batch_begin()
 
-            self.train_state.set_data_train(
-                *self.data.train_next_batch(self.batch_size)
-            )
-            self._train_step(
-                self.train_state.X_train,
-                self.train_state.y_train,
-                self.train_state.train_aux_vars,
-            )
+            # Get all training points including BCs
+            X_train_all, y_train_all, train_aux_vars_all = self.data.train_next_batch()
+
+            # Separate BC points from the rest
+            num_bcs = np.sum(self.data.num_bcs)
+            X_train_bc = X_train_all[:num_bcs]
+            y_train_bc = y_train_all[:num_bcs] if y_train_all is not None else None
+            train_aux_vars_bc = train_aux_vars_all[:num_bcs] if train_aux_vars_all is not None else None
+
+            X_train_rest = X_train_all[num_bcs:]
+            y_train_rest = y_train_all[num_bcs:] if y_train_all is not None else None
+            train_aux_vars_rest = train_aux_vars_all[num_bcs:] if train_aux_vars_all is not None else None
+
+            # Create mini-batches from the rest of the points
+            num_batches = int(np.ceil(len(X_train_rest) / self.batch_size))
+            for batch_idx in range(num_batches):
+                self.callbacks.on_batch_begin()
+                start_idx = batch_idx * self.batch_size
+                end_idx = min((batch_idx + 1) * self.batch_size, len(X_train_rest))
+
+                X_train_batch = X_train_rest[start_idx:end_idx]
+                y_train_batch = y_train_rest[start_idx:end_idx] if y_train_rest is not None else None
+                train_aux_vars_batch = train_aux_vars_rest[start_idx:end_idx] if train_aux_vars_rest is not None else None
+
+                # Combine BC points with the current batch
+                X_train_combined = np.vstack((X_train_bc, X_train_batch))
+                y_train_combined = np.concatenate((y_train_bc, y_train_batch)) if y_train_batch is not None else None
+                train_aux_vars_combined = np.concatenate((train_aux_vars_bc, train_aux_vars_batch)) if train_aux_vars_batch is not None else None
+
+                self.train_state.set_data_train(X_train_combined, y_train_combined, train_aux_vars_combined)
+                self._train_step(
+                    self.train_state.X_train,
+                    self.train_state.y_train,
+                    self.train_state.train_aux_vars,
+                )
+                self.callbacks.on_batch_end()
+                self.train_state.step += 1
+                if self.train_state.step % display_every == 0 or i + 1 == iterations:
+                    self._test(verbose=verbose)
+
+                if self.stop_training:
+                    break
 
             self.train_state.epoch += 1
-            self.train_state.step += 1
-            if self.train_state.step % display_every == 0 or i + 1 == iterations:
-                self._test(verbose=verbose)
 
-            self.callbacks.on_batch_end()
             self.callbacks.on_epoch_end()
 
             if self.stop_training:
