@@ -17,6 +17,8 @@ from abc import ABC, abstractmethod
 from functools import wraps
 
 import numpy as np
+import torch
+from scipy.interpolate import griddata
 
 from .. import backend as bkd
 from .. import config
@@ -89,7 +91,51 @@ class NeumannBC(BC):
         self.func = npfunc_range_autocache(utils.return_tensor(func))
 
     def error(self, X, inputs, outputs, beg, end, aux_var=None):
+        """
+        Computes the error between the computed Neumann boundary condition and the specified function.
+
+        Parameters:
+        - X: All points in the domain.
+        - inputs: Input data for the neural network.
+        - outputs: Output data from the neural network.
+        - beg: Start index of the boundary points.
+        - end: End index of the boundary points.
+        - aux_var: Auxiliary variables (if any).
+
+        Returns:
+        - The difference between the computed normal derivative and the specified Neumann boundary condition.
+        """
+        # Evaluate the Neumann boundary condition function on the boundary points
         values = self.func(X, beg, end, aux_var)
+        
+        # Extract boundary points
+        bc_points = X[beg:end]
+        
+        # Identify points on the edge where x == -0.5
+        edge_idx = bc_points[:, 0] == -0.5
+        
+        if edge_idx.any():
+            # Extract edge boundary points
+            edge_bc_points = bc_points[edge_idx]
+            
+            # Load FEM results from a file
+            fem_results = np.loadtxt('/home/gll/Documents/Fe/三角和长方/square/output.hfe')
+            # Extract real and imaginary parts of the FEM results
+            real_z = fem_results[:, 4] + 1j * fem_results[:, 5]
+            # Interpolate FEM results to the edge boundary points
+            real_fem_results = griddata((fem_results[:, 0], fem_results[:, 1]), real_z, (edge_bc_points[:, 0], edge_bc_points[:, 1]), method='cubic')
+            
+            #NOTE: Determine whether to use real or imaginary part based on the index range
+            #TODO: This is a hack, find a better way
+            if beg < 10:
+                fem_values = torch.real(torch.from_numpy(real_fem_results).to(inputs.device).unsqueeze(-1)).float()
+            else:
+                fem_values = torch.imag(torch.from_numpy(real_fem_results).to(inputs.device).unsqueeze(-1)).float()
+            
+            # Replace the boundary condition values with the interpolated FEM values
+            values[edge_idx] = fem_values
+        
+        # Compute the normal derivative and return the error
         return self.normal_derivative(X, inputs, outputs, beg, end) - values
 
 
