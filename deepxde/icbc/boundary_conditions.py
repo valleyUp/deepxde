@@ -133,16 +133,20 @@ class NeumannBC(BC):
         #NOTE: Determine whether to use real or imaginary part based on the index range
         #TODO: This is a hack, find a better way
         if beg < 10:
-            fem_values = torch.real(torch.from_numpy(real_fem_results).to(inputs.device).unsqueeze(-1)).float()
+            fem_values = torch.real(torch.from_numpy(real_fem_results).to(inputs.device)).float()
+            fem_loss = outputs[beg: end][edge_idx][:, 0] - fem_values
         else:
-            fem_values = torch.imag(torch.from_numpy(real_fem_results).to(inputs.device).unsqueeze(-1)).float()
+            fem_values = torch.imag(torch.from_numpy(real_fem_results).to(inputs.device)).float()
+            fem_loss = outputs[beg: end][edge_idx][:, 1] - fem_values
         
-        # Replace the boundary condition values with the interpolated FEM values
-        values[edge_idx] = fem_values
+
+        total_loss = torch.zeros_like(values, device=inputs.device)
+        func_loss = self.normal_derivative(X, inputs, outputs, beg, end)[~edge_idx] - values[~edge_idx]
+        total_loss[~edge_idx] = func_loss
+        total_loss[edge_idx] = fem_loss.unsqueeze(-1)
         
         # Compute the normal derivative and return the error
-        return self.normal_derivative(X, inputs, outputs, beg, end) - values
-
+        return total_loss
 
 class RobinBC(BC):
     """Robin boundary conditions: dy/dn(x) = func(x, y)."""
